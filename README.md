@@ -1,0 +1,51 @@
+# Dinner Madness
+
+Can't decide where to eat? Dinner Madness pulls the restaurants near you, seeds them into a tournament-style bracket, and lets everyone at the table vote from their own phone, round by round, until one place is left.
+
+Everything lives in one file, `index.html`. It has no backend, needs no accounts, and uses no API keys.
+
+## How it plays
+
+1. **Where are you?** The app asks for your location. If you say no, or the phone can't find you, type an address, city, or ZIP instead.
+2. **How far will you drive?** Pick 5, 10, 15, 20, 25, or 30 miles.
+3. **Who's eligible?** Choose whether to include fast food, skip the big chains, or include coffee, dessert, and snack shops.
+4. **Seed the field.** There are two modes:
+   - **Cuisine first** (the default). Cuisines face off first, like Mexican vs. Chinese and Pizza vs. BBQ. The winning cuisine then gets its own bracket of restaurants.
+   - **Restaurants only.** Specific restaurants face off, from any cuisine or just one.
+
+   You choose 2–16 contenders. Cuisines are seeded by how many nearby spots they have; restaurants are seeded by distance, or shuffled.
+5. **Share it.** A QR code and link open the bracket on anyone's phone. Friends type a first name and they're in.
+6. **Vote.** Everyone picks a winner in every matchup of the round, then locks in. A round closes on its own once everyone has voted. The organizer can close a round early if someone wanders off.
+   - Ties go to the organizer's pick. If the organizer didn't pick either side, the better seed advances.
+   - Someone without a phone can be added under **Invite → Someone at the table without a phone?** They then vote on your phone through a "Voting as" switch.
+7. **Winner.** The winning restaurant comes with a Directions link, an "Hours & reviews" link (Google Maps), and its website and phone number when those are on file.
+
+## Put it online (GitHub Pages, about 3 minutes)
+
+The share link and QR code only work for other people when the page is hosted online.
+
+1. On GitHub, create a new **public** repository, for example `dinner-madness`.
+2. Upload `index.html` (and this README) to the repository's main branch.
+3. Go to **Settings → Pages**. Under "Build and deployment", set **Source: Deploy from a branch**, **Branch: main**, and folder **/ (root)**. Save.
+4. After a minute the app is live at `https://<your-username>.github.io/dinner-madness/`.
+
+GitHub Pages serves over HTTPS, and phones need HTTPS before they'll share their location. Opening the file directly from your computer works for trying it out, but friends can't join that way.
+
+## What it runs on
+
+| Job | Service | Notes |
+|---|---|---|
+| Restaurants and their cuisine | OpenStreetMap via the Overpass API (`overpass-api.de`, with `overpass.kumi.systems` as a backup) | Free, no key. About 800 places within 15 miles of Westfield, IN load in roughly 4 seconds. |
+| Address search and "near …" label | Nominatim (OpenStreetMap), with Photon as a backup | Free, no key. |
+| Live voting between phones | ntfy.sh, a public message relay | Free, no account. Each bracket is a private-by-obscurity channel named `dinnermadness-<code>`. Messages expire after about 12 hours. |
+| QR codes | qrcode-generator (MIT license), bundled into the page | Works offline. |
+
+Every phone replays the same ordered list of messages (joins, votes, round closes), so every phone works out the same bracket on its own. Nobody's phone has to stay open, including the organizer's.
+
+## Good to know
+
+- **Links expire.** A bracket lasts about 12 hours, which covers one dinner decision. After that the link shows a "left the building" page.
+- **Privacy.** Anyone with the link or code can join and vote. The shared bracket data includes only the city name and a location rounded to about 1 km. The exact address never leaves the organizer's phone.
+- **Data quality.** OpenStreetMap coverage is good in US metros but not perfect. Places with no cuisine tag are sorted by keywords in their names (for example "Taqueria…" goes to Mexican and "…Ale House" goes to American & Pub). Whatever still can't be sorted goes into a **Wildcard** category. Hours and ratings aren't included, so the winner card links to Google Maps for those.
+- **Distance.** The radius is a straight line from you, not driving distance. Fifteen miles covers roughly a 20–30 minute drive in most suburbs.
+- **Your own relay.** If you ever outgrow the free public relay, you can run your own ntfy server. Set `window.DM_NTFY_BASE = 'https://your-ntfy-host'` in a `<script>` before the app script.
