@@ -651,23 +651,30 @@ function cleanUrl(w) {
 }
 
 /* ---------- restaurant search (OpenStreetMap / Overpass) ---------- */
-const OVERPASS = [
-  {url: 'https://overpass-api.de/api/interpreter', ms: 35000},
-  {url: 'https://overpass.kumi.systems/api/interpreter', ms: 75000}
+const OVERPASS_MAIN = 'https://overpass-api.de/api/interpreter';
+const OVERPASS_PLAN = [
+  {url: OVERPASS_MAIN, ms: 25000},
+  {url: OVERPASS_MAIN, ms: 25000, wait: 1500},
+  {url: 'https://overpass.kumi.systems/api/interpreter', ms: 60000},
+  {url: 'https://overpass.private.coffee/api/interpreter', ms: 45000}
 ];
-async function fetchPlaces(where, opts) {
+async function fetchPlaces(where, opts, onRetry) {
   const radius = Math.round(where.r * 1609.344);
   const am = ['restaurant', 'fast_food'].concat(opts.sn ? ['cafe', 'ice_cream'] : []).join('|');
   const q = '[out:json][timeout:60];nwr["amenity"~"^(' + am + ')$"]["name"](around:' + radius + ',' + (+where.lat).toFixed(5) + ',' + (+where.lon).toFixed(5) + ');out center tags;';
   let last;
-  for (const ep of OVERPASS) {
+  for (let i = 0; i < OVERPASS_PLAN.length; i++) {
+    const ep = OVERPASS_PLAN[i];
+    if (i > 0 && onRetry) onRetry(i);
+    if (ep.wait) await sleep(ep.wait);
     const ctl = new AbortController(); const to = setTimeout(() => ctl.abort(), ep.ms);
     try {
       const res = await fetch(ep.url, {method: 'POST', body: 'data=' + encodeURIComponent(q), headers: {'Content-Type': 'application/x-www-form-urlencoded'}, signal: ctl.signal});
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const j = await res.json();
       clearTimeout(to);
-      return normalize(j.elements || [], where, opts);
+      if (!j || !Array.isArray(j.elements)) throw new Error('bad response');
+      return normalize(j.elements, where, opts);
     } catch (e) { clearTimeout(to); last = e; }
   }
   throw last || new Error('no server');
@@ -1107,15 +1114,16 @@ async function findRestaurants() {
   busy(btn, true, 'Scouting ' + SETUP.r + ' miles out…');
   const lines = ['Scouting ' + SETUP.r + ' miles out…', 'Sorting tacos from teriyaki…', 'Checking who has a drive-thru…', 'Seeding the field…'];
   let li = 0; const iv = setInterval(() => { li = (li + 1) % lines.length; const s = btn.querySelector('span:last-child'); if (s) s.textContent = lines[li]; }, 2600);
+  const onRetry = () => { lines.splice(0, lines.length, 'The map server is busy. Retrying…', 'Still working on it…', 'Trying a backup map server…'); li = 0; const s = btn.querySelector('span:last-child'); if (s) s.textContent = lines[0]; };
   try {
-    const places = await fetchPlaces({lat: SETUP.where.lat, lon: SETUP.where.lon, r: SETUP.r}, SETUP);
+    const places = await fetchPlaces({lat: SETUP.where.lat, lon: SETUP.where.lon, r: SETUP.r}, SETUP, onRetry);
     if (!places.length) {
       $('#find-err').hidden = false;
       $('#find-err').innerHTML = '<p><b>No restaurants turned up within ' + SETUP.r + ' miles.</b> Try a bigger radius or turn on fast food.</p>';
     } else { BUILD.places = places; openBuild(); }
   } catch (e) {
     $('#find-err').hidden = false;
-    $('#find-err').innerHTML = '<p><b>The restaurant map didn’t answer in time.</b> Give it another try in a moment. A smaller radius loads faster.</p>';
+    $('#find-err').innerHTML = '<p><b>The free map servers are overloaded right now.</b> Wait a minute and tap Find restaurants again. A smaller radius also loads faster.</p>';
   } finally { clearInterval(iv); busy(btn, false); }
 }
 
