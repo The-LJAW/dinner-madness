@@ -2,7 +2,7 @@
 
 Can't decide where to eat? Dinner Madness pulls the restaurants near you, seeds them into a tournament-style bracket, and lets everyone at the table vote from their own phone, round by round, until one place is left.
 
-Everything lives in one file, `index.html`. It has no backend, needs no accounts, and uses no API keys.
+Everything lives in one file, `index.html`. It has no backend, and players need no accounts. The only key inside is PostHog's public project key, which can send usage events but can't read any data.
 
 ## How it plays
 
@@ -41,6 +41,23 @@ GitHub Pages serves over HTTPS, and phones need HTTPS before they'll share their
 | QR codes | qrcode-generator (MIT license), bundled into the page | Works offline. |
 
 Every phone replays the same ordered list of messages (joins, votes, round closes), so every phone works out the same bracket on its own. Nobody's phone has to stay open, including the organizer's.
+
+## Usage analytics (PostHog)
+
+The app sends a small set of named, anonymous events to PostHog (US cloud). There's no autocapture, no screen recording, and no cookies. Each phone gets a random ID that's stored only on that phone.
+
+| Stage | Events |
+|---|---|
+| Arrive | `app_opened` (with `via`: `qr`, `link`, `share`, or `direct`) |
+| Set up | `location_set`, `location_failed`, `restaurant_search` (ok, places, attempts, seconds) |
+| Create and invite | `bracket_created`, `invite_shared`, `join_viewed`, `guest_joined`, `proxy_added`, `bracket_missing` |
+| Vote | `voting_started`, `picks_locked`, `round_closed` (auto or organizer), `cuisine_decided`, `stage2_started`, `stage2_skipped` |
+| Finish and act | `bracket_finished` (winner, runner-up, minutes, players), `winner_action` (directions, hours and reviews, website, call), `start_own_clicked`, `new_bracket_clicked` |
+| Problems | `error` (voting server or bracket creation) |
+
+Round and bracket results are sent only from the organizer's phone, so each one is counted once. Voter names, typed addresses, and exact coordinates are never sent; the location is city-level only.
+
+To turn analytics off, set `PH_KEY` to an empty string in `index.html`.
 
 ## Good to know
 

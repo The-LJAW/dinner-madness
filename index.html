@@ -404,7 +404,7 @@ button.mu-o:hover{background:var(--sunk)}
       </div>
     </form>
 
-    <p class="foot">Restaurant data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors. Votes sync through <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a>; brackets disappear about 12 hours after they're made.</p>
+    <p class="foot">Restaurant data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors. Votes sync through <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a>; brackets disappear about 12 hours after they're made. We count anonymous usage to improve the app, never names or addresses.</p>
   </section>
 
   <!-- HOST: seed the bracket -->
@@ -461,6 +461,7 @@ button.mu-o:hover{background:var(--sunk)}
       </div>
       <button type="submit" class="btn big" id="btn-join">Join the bracket</button>
       <p class="fine" id="join-count"></p>
+      <p class="fine">Dinner Madness counts anonymous usage to improve the app, never names or addresses.</p>
     </form>
     <section class="panel">
       <div class="ph"><h3>The field</h3></div>
@@ -537,7 +538,7 @@ button.mu-o:hover{background:var(--sunk)}
       <h1 class="display">This bracket has <span class="hl">left the building</span></h1>
       <p class="lede">Brackets disappear about 12 hours after they're made, or the link may have been cut off when it was shared. Ask whoever sent it for a fresh link, or start your own.</p>
     </div>
-    <a class="btn big" href="./">Start a new bracket</a>
+    <a class="btn big" href="./" data-ev="start_own" data-from="missing">Start a new bracket</a>
   </section>
 
 </main>
@@ -597,6 +598,51 @@ let me = store.get('me', null);
 if (!me || typeof me.id !== 'string') { me = {id: rid(12), name: ''}; store.set('me', me); }
 function setMyName(n) { me.name = n; store.set('me', me); }
 
+/* ---------- anonymous usage analytics (PostHog) ----------
+   Only named events are sent (no autocapture, no screen recording, no cookies).
+   Never sent: voter names, typed addresses, or exact coordinates. */
+const PH_KEY = window.DM_PH_KEY || 'phc_wbKQmQgmEH68SBAxbiDh2iJyj9eJgqXW35ktnxRUT5Yq';
+const PH_HOST = 'https://us.i.posthog.com';
+const APP_VERSION = '2026.09.23';
+const VIA = (new URLSearchParams(location.search).get('via') || '').toLowerCase().replace(/[^a-z]/g, '').slice(0, 12);
+const FIRST_VISIT = !store.get('seen', 0); store.set('seen', 1);
+const AN = {q: [], ready: false, dead: !/^phc_[A-Za-z0-9]+$/.test(PH_KEY)};
+function track(event, props) {
+  if (AN.dead) return;
+  const p = Object.assign({app_version: APP_VERSION}, props || {});
+  try { if (AN.ready) window.posthog.capture(event, p); else if (AN.q.length < 200) AN.q.push([event, p]); } catch (e) {}
+}
+function loadAnalytics() {
+  if (AN.dead) return;
+  const s = document.createElement('script');
+  s.async = true; s.crossOrigin = 'anonymous';
+  s.src = PH_HOST.replace('.i.posthog.com', '-assets.i.posthog.com') + '/static/array.js';
+  s.onload = () => {
+    try {
+      window.posthog.init(PH_KEY, {
+        api_host: PH_HOST, autocapture: false, capture_pageview: false, capture_pageleave: false,
+        disable_session_recording: true, disable_surveys: true, advanced_disable_flags: true,
+        persistence: 'localStorage', person_profiles: 'always',
+        bootstrap: {distinctID: me.id, isIdentifiedID: true}
+      });
+      AN.ready = true;
+      AN.q.splice(0).forEach(([e, p]) => window.posthog.capture(e, p));
+    } catch (e) { AN.dead = true; AN.q.length = 0; }
+  };
+  s.onerror = () => { AN.dead = true; AN.q.length = 0; };
+  document.head.appendChild(s);
+}
+/* true the first time this device sees a key, so organizer-side events fire once */
+function sentOnce(key) {
+  const m = store.get('sent', {});
+  if (m[key]) return false;
+  m[key] = Date.now();
+  const ks = Object.keys(m);
+  if (ks.length > 300) ks.sort((a, b) => m[a] - m[b]).slice(0, ks.length - 300).forEach(k => { delete m[k]; });
+  store.set('sent', m);
+  return true;
+}
+
 /* ---------- cuisine categories ---------- */
 const CATS = [
   {k: 'pizza', n: 'Pizza', cu: 'pizza', kw: /pizz/i},
@@ -652,11 +698,15 @@ function cleanUrl(w) {
 
 /* ---------- restaurant search (OpenStreetMap / Overpass) ---------- */
 const OVERPASS_MAIN = 'https://overpass-api.de/api/interpreter';
+// The main server throws quick 504s in bursts when it's busy, so retry it a few times
+// with short pauses before leaning on the slower backups.
 const OVERPASS_PLAN = [
   {url: OVERPASS_MAIN, ms: 25000},
   {url: OVERPASS_MAIN, ms: 25000, wait: 1500},
-  {url: 'https://overpass.kumi.systems/api/interpreter', ms: 60000},
-  {url: 'https://overpass.private.coffee/api/interpreter', ms: 45000}
+  {url: OVERPASS_MAIN, ms: 25000, wait: 3000},
+  {url: 'https://overpass.kumi.systems/api/interpreter', ms: 45000},
+  {url: OVERPASS_MAIN, ms: 25000, wait: 4000},
+  {url: 'https://overpass.private.coffee/api/interpreter', ms: 40000}
 ];
 async function fetchPlaces(where, opts, onRetry) {
   const radius = Math.round(where.r * 1609.344);
@@ -757,8 +807,9 @@ function newStage(def) {
   return {def, n, size, R: Math.log2(size), started: !!def.go, done: false, round: 0,
     rounds: [makeRound(order.map(s => (s <= n ? s - 1 : -1)))], votes: {}, champion: null};
 }
-function closeRound(st, hostId) {
+function closeRound(st, hostId, how) {
   const rd = st.rounds[st.round], vs = st.votes[st.round] || {};
+  rd.closedBy = how || 'auto';
   rd.matches.forEach((m, i) => {
     if (m.a < 0 || m.b < 0) { m.w = m.a >= 0 ? m.a : m.b; m.how = 'bye'; return; }
     let va = 0, vb = 0;
@@ -797,7 +848,7 @@ function derive(log) {
     while (st.started && !st.done && guard++ < 6) {
       const rd = st.rounds[st.round], vs = st.votes[st.round] || {};
       const votable = rd.matches.some(m => m.a >= 0 && m.b >= 0);
-      if (!votable || (S.parts.length && S.parts.every(p => vs[p.id]))) closeRound(st, S.host); else break;
+      if (!votable || (S.parts.length && S.parts.every(p => vs[p.id]))) closeRound(st, S.host, votable ? 'auto' : 'bye'); else break;
     }
   };
   for (const m of log) {
@@ -809,6 +860,8 @@ function derive(log) {
       const cur = S.stages[d.s];
       if (cur && cur.started) continue;
       S.stages[d.s] = newStage(d);
+      S.stages[d.s].t0 = m.time;
+      if (d.s === 1 && S.t0 == null) S.t0 = m.time;
       if (d.s > S.current) S.current = d.s;
     } else if (S.host === null) {
       continue;
@@ -823,9 +876,9 @@ function derive(log) {
       (st.votes[d.r] = st.votes[d.r] || {})[d.id] = d.p;
     } else if (d.t === 'close') {
       const st = S.stages[d.s];
-      if (st && d.host === S.host && st.started && !st.done && d.r === st.round) closeRound(st, S.host);
+      if (st && d.host === S.host && st.started && !st.done && d.r === st.round) closeRound(st, S.host, 'organizer');
     }
-    for (const k in S.stages) settle(S.stages[k]);
+    for (const k in S.stages) { const st = S.stages[k]; settle(st); if (st.done && st.doneAt == null) st.doneAt = m.time; }
   }
   return S;
 }
@@ -892,6 +945,7 @@ class LocalChannel {
 async function sendVia(chan, d) {
   let err;
   for (let i = 0; i < 3; i++) { try { return await chan.publish(d); } catch (e) { err = e; await sleep(700 * (i + 1)); } }
+  track('error', {where: 'voting_server_send', message_type: d && d.t, detail: String(err && err.message || err).slice(0, 80)});
   throw err;
 }
 
@@ -1065,7 +1119,9 @@ async function doLocate() {
     renderLoc('locating');
     const label = await reverseLabel(p.lat, p.lon);
     SETUP.where = {lat: p.lat, lon: p.lon, label, src: 'gps'}; saveSetup(); renderLoc('found');
+    track('location_set', {method: 'gps', city: label});
   } catch (e) {
+    track('location_failed', {method: 'gps', reason: e && e.code === 1 ? 'denied' : 'unavailable'});
     const msg = e && e.code === 1
       ? 'Location access is off for this page. Type an address, city, or ZIP code instead.'
       : 'We couldn’t pin down your location. Type an address, city, or ZIP code instead.';
@@ -1083,8 +1139,9 @@ function initSetup() {
     e.preventDefault();
     const q = $('#addr').value.trim(); if (!q) { $('#addr').focus(); return; }
     renderLoc('locating');
-    try { const g = await geocode(q); SETUP.where = {lat: g.lat, lon: g.lon, label: g.label, src: 'addr'}; saveSetup(); renderLoc('found'); $('#addr').blur(); }
+    try { const g = await geocode(q); SETUP.where = {lat: g.lat, lon: g.lon, label: g.label, src: 'addr'}; saveSetup(); renderLoc('found'); $('#addr').blur(); track('location_set', {method: 'address', city: g.label}); }
     catch (err) {
+      track('location_failed', {method: 'address', reason: err && err.nf ? 'not_found' : 'lookup_error'});
       renderLoc('error', err && err.nf ? 'We couldn’t find “' + q + '”. Try a street address with the city, or just a ZIP code.' : 'Address lookup isn’t answering. Check your connection and try again.');
     }
   };
@@ -1114,14 +1171,18 @@ async function findRestaurants() {
   busy(btn, true, 'Scouting ' + SETUP.r + ' miles out…');
   const lines = ['Scouting ' + SETUP.r + ' miles out…', 'Sorting tacos from teriyaki…', 'Checking who has a drive-thru…', 'Seeding the field…'];
   let li = 0; const iv = setInterval(() => { li = (li + 1) % lines.length; const s = btn.querySelector('span:last-child'); if (s) s.textContent = lines[li]; }, 2600);
-  const onRetry = () => { lines.splice(0, lines.length, 'The map server is busy. Retrying…', 'Still working on it…', 'Trying a backup map server…'); li = 0; const s = btn.querySelector('span:last-child'); if (s) s.textContent = lines[0]; };
+  const t0 = Date.now(); let attempts = 1;
+  const searchProps = () => ({radius: SETUP.r, city: SETUP.where.label, fast_food: !!SETUP.ff, local_only: !!SETUP.nc, snacks: !!SETUP.sn, attempts, secs: Math.round((Date.now() - t0) / 100) / 10});
+  const onRetry = i => { attempts = i + 1; lines.splice(0, lines.length, 'The map server is busy. Retrying…', 'Still working on it…', 'Trying a backup map server…'); li = 0; const s = btn.querySelector('span:last-child'); if (s) s.textContent = lines[0]; };
   try {
     const places = await fetchPlaces({lat: SETUP.where.lat, lon: SETUP.where.lon, r: SETUP.r}, SETUP, onRetry);
+    track('restaurant_search', Object.assign(searchProps(), {ok: true, places: places.length}));
     if (!places.length) {
       $('#find-err').hidden = false;
       $('#find-err').innerHTML = '<p><b>No restaurants turned up within ' + SETUP.r + ' miles.</b> Try a bigger radius or turn on fast food.</p>';
     } else { BUILD.places = places; openBuild(); }
   } catch (e) {
+    track('restaurant_search', Object.assign(searchProps(), {ok: false, error: String(e && e.message || e).slice(0, 80)}));
     $('#find-err').hidden = false;
     $('#find-err').innerHTML = '<p><b>The free map servers are overloaded right now.</b> Wait a minute and tap Find restaurants again. A smaller radius also loads faster.</p>';
   } finally { clearInterval(iv); busy(btn, false); }
@@ -1201,12 +1262,14 @@ async function createBracket(localOnly) {
     await sendVia(chan, {t: 'join', id: me.id, n: name});
   } catch (e) {
     busy(btn, false);
+    track('error', {where: 'create_bracket', local_only: !!localOnly, detail: String(e && e.message || e).slice(0, 80)});
     if (!localOnly) { $('#create-err').hidden = false; $('#create-err').scrollIntoView({behavior: 'smooth', block: 'center'}); }
     else toast('This browser won’t let the page save anything. Try a regular (non-private) window.');
     return;
   }
   busy(btn, false); BUILD.pendingCode = null;
   addRecent(code, title);
+  track('bracket_created', {code, mode: BUILD.mode, contenders: items.length, rounds: Math.log2(bracketSize(items.length)), radius: SETUP.r, category: BUILD.cat ? CAT[BUILD.cat].n : null, local_only: !!localOnly, city: SETUP.where.label, places_found: BUILD.places.length});
   try { history.pushState(null, '', '?b=' + code); } catch (e) {}
   openRoom(code, chan);
 }
@@ -1215,13 +1278,13 @@ async function createBracket(localOnly) {
    ROOM (everyone)
    ========================================================= */
 const R = {code: null, chan: null, S: null, tab: 'vote', picks: {}, editing: {}, acting: null, confirm: null, lastSig: null, voteSig: null, s2: null, qr: null, resOpen: {}, fired: {}};
-function shareUrl() { return location.origin + location.pathname + '?b=' + R.code; }
+function shareUrl(via) { return location.origin + location.pathname + '?b=' + R.code + (via ? '&via=' + via : ''); }
 function openRoom(code, chan) {
   R.code = code; R.acting = me.id;
   R.chan = chan || (store.get('localmode.' + code, 0) ? new LocalChannel(code) : new NtfyChannel(code));
   R.chan.onChange = onLog;
   R.chan.onStatus = renderStatus;
-  R.chan.onFail = () => { if (VIEW === 'loading') $('#loading-msg').textContent = 'Can’t reach the voting server yet. Check your connection; we’ll keep trying.'; };
+  R.chan.onFail = () => { if (sentOnce(code + '.connfail.' + Math.floor(Date.now() / 600000))) track('error', {where: 'voting_server_connect', code}); if (VIEW === 'loading') $('#loading-msg').textContent = 'Can’t reach the voting server yet. Check your connection; we’ll keep trying.'; };
   $('#codechip').hidden = false; $('#codechip').textContent = fmtCode(code);
   if (!R.S) { show('loading'); $('#loading-msg').textContent = 'Loading the bracket…'; }
   R.chan.connect();
@@ -1234,14 +1297,36 @@ function localVoters(S) {
 function onLog(log) {
   const S = derive(log); R.S = S;
   if (!S.host) {
-    if (R.chan.loaded && !R._miss) R._miss = setTimeout(async () => { await R.chan.poll(); await sleep(150); if (!R.S || !R.S.host) show('missing'); }, 3500);
+    if (R.chan.loaded && !R._miss) R._miss = setTimeout(async () => { await R.chan.poll(); await sleep(150); if (!R.S || !R.S.host) { show('missing'); track('bracket_missing', {code: R.code, via: VIA || 'direct'}); } }, 3500);
     return;
   }
   clearTimeout(R._miss); R._miss = null;
   if (!S.partMap[me.id]) { if (VIEW !== 'join') openJoin(); else renderJoin(); return; }
   if (VIEW !== 'room') { show('room'); setTab(R.tab); addRecent(R.code, S.stages[1].def.title); }
   announce(S);
+  trackProgress(S);
   renderRoom();
+}
+/* Only the organizer's phone reports round and bracket results, so each is counted once. */
+function trackProgress(S) {
+  if (S.host !== me.id) return;
+  try {
+    Object.keys(S.stages).forEach(k => {
+      const s = +k, st = S.stages[k], def = st.def;
+      st.rounds.forEach((rd, r) => {
+        if (!rd.closed || rd.closedBy === 'bye' || !sentOnce(R.code + '.r.' + s + '.' + r)) return;
+        const real = rd.matches.filter(m => m.how !== 'bye');
+        track('round_closed', {code: R.code, stage: s, kind: def.kind, round: r, round_name: roundName(rd.matches.length), closed_by: rd.closedBy, voters: rd.voters, total_players: S.parts.length, matchups: real.length, ties: real.filter(m => m.how === 'host' || m.how === 'seed').length});
+      });
+      if (!st.done || !sentOnce(R.code + '.done.' + s)) return;
+      const E = def.ents, c = E[st.champion], fm = st.rounds[st.rounds.length - 1].matches[0];
+      const ru = fm && fm.how !== 'bye' ? E[fm.w === fm.a ? fm.b : fm.a] : null;
+      const minutes = st.doneAt != null && S.t0 != null ? Math.round((st.doneAt - S.t0) / 6) / 10 : null;
+      const base = {code: R.code, mode: def.mode, contenders: st.n, players: S.parts.length, no_phone_voters: S.parts.filter(p => p.by).length, minutes_since_created: minutes, radius: def.where && def.where.r, city: def.where && def.where.label};
+      if (def.kind === 'cuisine') track('cuisine_decided', Object.assign(base, {cuisine: c.n, runner_up: ru ? ru.n : null}));
+      else track('bracket_finished', Object.assign(base, {stages: s, winner: c.n, winner_category: CAT[c.k] ? CAT[c.k].n : null, winner_distance_mi: c.d, runner_up: ru ? ru.n : null, final_score: fm && fm.how !== 'bye' ? Math.max(fm.va, fm.vb) + '-' + Math.min(fm.va, fm.vb) : null}));
+    });
+  } catch (e) {}
 }
 function renderStatus(s) {
   const el = $('#room-status'); el.dataset.s = s;
@@ -1249,7 +1334,7 @@ function renderStatus(s) {
 }
 
 /* join */
-function openJoin() { show('join'); renderJoin(); $('#join-name').value = me.name || ''; }
+function openJoin() { show('join'); renderJoin(); $('#join-name').value = me.name || ''; track('join_viewed', {code: R.code, via: VIA || 'direct', first_visit: FIRST_VISIT, already_joined_count: R.S.parts.length, stage: R.S.current, started: !!R.S.stages[R.S.current].started}); }
 function renderJoin() {
   const S = R.S, def = S.stages[1].def, host = S.partMap[S.host];
   $('#join-host').textContent = (host ? host.n : 'A friend') + ' wants help picking dinner';
@@ -1265,7 +1350,7 @@ function initJoin() {
     if (!n) { $('#join-name').focus(); toast('Add your name so everyone knows who voted.'); return; }
     setMyName(n);
     const btn = $('#btn-join'); busy(btn, true, 'Joining…');
-    try { await sendVia(R.chan, {t: 'join', id: me.id, n}); }
+    try { await sendVia(R.chan, {t: 'join', id: me.id, n}); track('guest_joined', {code: R.code, via: VIA || 'direct', first_visit: FIRST_VISIT}); }
     catch (err) { toast('Couldn’t join. Check your connection and try again.'); }
     finally { busy(btn, false); }
   };
@@ -1320,7 +1405,7 @@ function renderVote(S, st, isHost) {
     R.voteSig = sig;
     const box = $('#vote-main');
     box.innerHTML = !st.started ? lobbyHTML(S, st, isHost) : !st.done ? votingHTML(S, st, isHost) : doneHTML(S, st, isHost);
-    const lq = $('#lobby-qr'); if (lq) lq.innerHTML = R.qr || (R.qr = qrSVG(shareUrl()));
+    const lq = $('#lobby-qr'); if (lq) lq.innerHTML = R.qr || (R.qr = qrSVG(shareUrl('qr')));
     if (st.done && st.def.kind === 'place') {
       const fk = R.code + '.' + S.current;
       if (!R.fired[fk]) { R.fired[fk] = 1; confetti(); }
@@ -1409,9 +1494,9 @@ function doneHTML(S, st, isHost) {
   const web = cleanUrl(c.w), tel = String(c.ph || '').replace(/[^\d+]/g, '');
   let h = '<div class="champ">' + mark + '<p class="eyebrow">Tonight we’re eating at</p><h2 class="champ-n">' + esc(c.n) + '</h2><p class="champ-sub">' + esc([c.cu || (CAT[c.k] ? CAT[c.k].n : ''), c.d != null ? c.d + ' mi from ' + (def.where ? def.where.label : 'the organizer') : ''].filter(Boolean).join(' · ')) + '</p>' +
     (c.a ? '<p>' + esc(c.a) + '</p>' : '') + scoreLine +
-    '<div class="champ-acts"><a class="btn" href="' + esc(mapsDir(c)) + '" target="_blank" rel="noopener">Directions</a><a class="btn ghost" href="' + esc(mapsFind(c)) + '" target="_blank" rel="noopener">Hours &amp; reviews</a>' +
-    (web ? '<a class="btn ghost" href="' + esc(web) + '" target="_blank" rel="noopener">Website</a>' : '') + (tel ? '<a class="btn ghost" href="tel:' + esc(tel) + '">Call</a>' : '') + '</div></div>';
-  h += '<a class="btn ghost big" href="./">' + (isHost ? 'Start a new bracket' : 'Start your own bracket') + '</a>';
+    '<div class="champ-acts"><a class="btn" href="' + esc(mapsDir(c)) + '" target="_blank" rel="noopener" data-wa="directions">Directions</a><a class="btn ghost" href="' + esc(mapsFind(c)) + '" target="_blank" rel="noopener" data-wa="hours_reviews">Hours &amp; reviews</a>' +
+    (web ? '<a class="btn ghost" href="' + esc(web) + '" target="_blank" rel="noopener" data-wa="website">Website</a>' : '') + (tel ? '<a class="btn ghost" href="tel:' + esc(tel) + '" data-wa="call">Call</a>' : '') + '</div></div>';
+  h += '<a class="btn ghost big" href="./" data-ev="' + (isHost ? 'new_bracket' : 'start_own') + '" data-from="champion">' + (isHost ? 'Start a new bracket' : 'Start your own bracket') + '</a>';
   return h;
 }
 
@@ -1442,13 +1527,14 @@ async function mountS2(S, st) {
     const ents = pk.entrants(); if (!ents.length) { toast('Pick at least one spot.'); return; }
     const def = defFrom(S.current + 1, 'place', ents, {mode: st.def.mode, title: c.n + ' Showdown', where: st.def.where, q: st.def.q, go: 1});
     busy(go, true, 'Starting stage 2…');
-    try { await sendVia(R.chan, def); } catch (e) { toast('Couldn’t start stage 2. Check your connection and try again.'); }
+    try { await sendVia(R.chan, def); track('stage2_started', {code: R.code, cuisine: c.n, contenders: ents.length, spots_available: items.length}); } catch (e) { toast('Couldn’t start stage 2. Check your connection and try again.'); }
     finally { busy(go, false); }
   };
   $('#s2-skip').onclick = () => {
+    track('stage2_skipped', {code: R.code, cuisine: c.n, spots_available: list.length});
     $('#s2-list').innerHTML = '<ul class="spots">' + list.slice(0, 15).map(p => {
       const e = placeEnt(p);
-      return '<li><span><b>' + esc(p.n) + '</b><small>' + esc(placeSub(p, false)) + '</small></span><a href="' + esc(mapsDir(e)) + '" target="_blank" rel="noopener">Directions</a></li>';
+      return '<li><span><b>' + esc(p.n) + '</b><small>' + esc(placeSub(p, false)) + '</small></span><a href="' + esc(mapsDir(e)) + '" target="_blank" rel="noopener" data-wa="list_directions">Directions</a></li>';
     }).join('') + '</ul>';
   };
 }
@@ -1476,6 +1562,7 @@ async function lockIn() {
   const b = $('#lock-btn'); busy(b, true, 'Locking in…');
   try {
     await sendVia(R.chan, {t: 'vote', s: S.current, r: st.round, id: voter.id, n: voter.n, p: picks.map(p => (p == null ? null : p))});
+    track('picks_locked', {code: R.code, stage: S.current, round: st.round, round_name: roundName(st.rounds[st.round].matches.length), for_no_phone_voter: voter.id !== me.id, changed_picks: !!R.editing[key], is_organizer: S.host === me.id});
     R.editing[key] = false;
     const vs = (R.S.stages[S.current].votes[st.round]) || {};
     const next = localVoters(R.S).find(v => v.id !== voter.id && !vs[v.id]);
@@ -1507,26 +1594,27 @@ function initRoom() {
     const act = e.target.closest('[data-act]'); if (!act) return;
     const a = act.dataset.act;
     if (a === 'edit') { const key = pkey(S.current, st.round, R.acting); R.editing[key] = true; R.picks[key] = (st.votes[st.round] || {})[R.acting].slice(); R.voteSig = null; renderVote(S, st, S.host === me.id); }
-    else if (a === 'start') { busy(act, true, 'Starting…'); try { await sendVia(R.chan, {t: 'start', s: S.current, host: me.id}); } catch (x) { busy(act, false); toast('Couldn’t start voting. Check your connection and try again.'); } }
+    else if (a === 'start') { busy(act, true, 'Starting…'); try { await sendVia(R.chan, {t: 'start', s: S.current, host: me.id}); track('voting_started', {code: R.code, stage: S.current, voters: S.parts.length, no_phone_voters: S.parts.filter(p => p.by).length}); } catch (x) { busy(act, false); toast('Couldn’t start voting. Check your connection and try again.'); } }
     else if (a === 'close') { R.confirm = S.current + '.' + st.round; R.voteSig = null; renderVote(S, st, true); }
     else if (a === 'close-no') { R.confirm = null; R.voteSig = null; renderVote(S, st, true); }
     else if (a === 'close-yes') { R.confirm = null; busy(act, true, 'Closing…'); try { await sendVia(R.chan, {t: 'close', s: S.current, r: st.round, host: me.id}); } catch (x) { busy(act, false); toast('Couldn’t close the round. Try again.'); } }
   };
   $('#btn-copy').onclick = async () => {
-    const url = shareUrl();
+    const url = shareUrl('link');
+    track('invite_shared', {code: R.code, method: 'copy'});
     try { await navigator.clipboard.writeText(url); toast('Link copied'); }
     catch (e) { const i = $('#inv-url'); i.focus(); i.select(); toast('Press and hold to copy the link'); }
   };
   if (navigator.share) {
     $('#btn-share').hidden = false;
-    $('#btn-share').onclick = () => { navigator.share({title: 'Dinner Madness', text: 'Help pick where we eat tonight. Vote in the bracket:', url: shareUrl()}).catch(() => {}); };
+    $('#btn-share').onclick = () => { navigator.share({title: 'Dinner Madness', text: 'Help pick where we eat tonight. Vote in the bracket:', url: shareUrl('share')}).then(() => track('invite_shared', {code: R.code, method: 'share_sheet'})).catch(() => {}); };
   }
   $('#proxy-form').onsubmit = async e => {
     e.preventDefault();
     const n = $('#proxy-name').value.trim().slice(0, 24); if (!n) { $('#proxy-name').focus(); return; }
     const id = rid(12), list = store.get('proxies.' + R.code, []);
     list.push({id, n}); store.set('proxies.' + R.code, list);
-    try { await sendVia(R.chan, {t: 'join', id, n, by: me.id}); $('#proxy-name').value = ''; toast(n + ' is in. Switch to them under “Voting as” on the Vote tab.', 3800); }
+    try { await sendVia(R.chan, {t: 'join', id, n, by: me.id}); track('proxy_added', {code: R.code}); $('#proxy-name').value = ''; toast(n + ' is in. Switch to them under “Voting as” on the Vote tab.', 3800); }
     catch (x) { toast('Couldn’t add ' + n + '. Check your connection and try again.'); }
   };
 }
@@ -1545,9 +1633,9 @@ function renderBracket() {
 
 /* invite tab */
 function renderInvite(S) {
-  if (!R.qr) R.qr = qrSVG(shareUrl());
+  if (!R.qr) R.qr = qrSVG(shareUrl('qr'));
   if ($('#inv-qr').dataset.code !== R.code) { $('#inv-qr').innerHTML = R.qr; $('#inv-qr').dataset.code = R.code; }
-  $('#inv-url').value = shareUrl(); $('#inv-code').textContent = fmtCode(R.code);
+  $('#inv-url').value = shareUrl('link'); $('#inv-code').textContent = fmtCode(R.code);
   $('#inv-file').hidden = location.protocol !== 'file:';
   $('#inv-local').hidden = !R.chan.local;
   const st = S.stages[S.current], vs = st.started && !st.done ? (st.votes[st.round] || {}) : null;
@@ -1578,10 +1666,18 @@ function confetti() {
 /* ---------- boot ---------- */
 function route() {
   const code = (new URLSearchParams(location.search).get('b') || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  track('app_opened', {entry: code ? 'bracket_link' : 'home', via: VIA || 'direct', first_visit: FIRST_VISIT, standalone: !!(window.matchMedia && matchMedia('(display-mode: standalone)').matches)});
   if (code.length >= 6 && code.length <= 16) openRoom(code);
   else showSetup();
 }
+loadAnalytics();
 initSetup(); initBuild(); initJoin(); initRoom();
+document.addEventListener('click', e => {
+  const t = e.target.closest && e.target.closest('[data-wa],[data-ev]'); if (!t) return;
+  const org = !!(R.S && R.S.host === me.id);
+  if (t.dataset.wa) track('winner_action', {code: R.code, action: t.dataset.wa, is_organizer: org});
+  else track(t.dataset.ev === 'new_bracket' ? 'new_bracket_clicked' : 'start_own_clicked', {code: R.code, from: t.dataset.from || null, is_organizer: org});
+}, true);
 window.addEventListener('popstate', () => location.reload());
 route();
 })();
