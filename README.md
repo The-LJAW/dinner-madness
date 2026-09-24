@@ -7,7 +7,7 @@ Everything lives in one file, `index.html`. It has no backend, and players need 
 ## How it plays
 
 1. **Where are you?** The app asks for your location. If you say no, or the phone can't find you, type an address, city, or ZIP instead.
-2. **How far will you drive?** Pick 5, 10, 15, 20, 25, or 30 miles.
+2. **How far will you drive?** Pick a 5, 10, 15, 20, or 30-minute drive (15 is the default). Each restaurant also shows its estimated drive time.
 3. **Who's eligible?** Choose whether to include fast food, skip the big chains, or include coffee, dessert, and snack shops.
 4. **Seed the field.** There are two modes:
    - **Cuisine first** (the default). Cuisines face off first, like Mexican vs. Chinese and Pizza vs. BBQ. The winning cuisine then gets its own bracket of restaurants.
@@ -35,7 +35,7 @@ GitHub Pages serves over HTTPS, and phones need HTTPS before they'll share their
 
 | Job | Service | Notes |
 |---|---|---|
-| Restaurants and their cuisine | OpenStreetMap via the Overpass API (`overpass-api.de`, with `overpass.kumi.systems` as a backup) | Free, no key. About 800 places within 15 miles of Westfield, IN load in roughly 4 seconds. |
+| Restaurants and their cuisine | OpenStreetMap via the Overpass API (`overpass-api.de`, with `overpass.kumi.systems` as a backup) | Free, no key. A 15-minute drive around Westfield, IN (about 6 miles) returns about 180 places in a few seconds. |
 | Address search and "near …" label | Nominatim (OpenStreetMap), with Photon as a backup | Free, no key. |
 | Live voting between phones | ntfy.sh, a public message relay | Free, no account. Each bracket is a private-by-obscurity channel named `dinnermadness-<code>`. Messages expire after about 12 hours. |
 | QR codes | qrcode-generator (MIT license), bundled into the page | Works offline. |
@@ -64,5 +64,5 @@ To turn analytics off, set `PH_KEY` to an empty string in `index.html`.
 - **Links expire.** A bracket lasts about 12 hours, which covers one dinner decision. After that the link shows a "left the building" page.
 - **Privacy.** Anyone with the link or code can join and vote. The shared bracket data includes only the city name and a location rounded to about 1 km. The exact address never leaves the organizer's phone.
 - **Data quality.** OpenStreetMap coverage is good in US metros but not perfect. Places with no cuisine tag are sorted by keywords in their names (for example "Taqueria…" goes to Mexican and "…Ale House" goes to American & Pub). Whatever still can't be sorted goes into a **Wildcard** category. Hours and ratings aren't included, so the winner card links to Google Maps for those.
-- **Distance.** The radius is a straight line from you, not driving distance. Fifteen miles covers roughly a 20–30 minute drive in most suburbs.
+- **Drive time.** Drive times are estimated from straight-line distance at about 2.5 minutes per mile, which fits suburban roads with lights: 15 minutes searches about 6 miles. There's no live traffic. To retune it, change `MIN_PER_MILE` in `index.html`.
 - **Your own relay.** If you ever outgrow the free public relay, you can run your own ntfy server. Set `window.DM_NTFY_BASE = 'https://your-ntfy-host'` in a `<script>` before the app script.
