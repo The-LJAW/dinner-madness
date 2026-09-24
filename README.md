@@ -16,7 +16,7 @@ Everything lives in one file, `index.html`. It has no backend, and players need 
    You choose 2–16 contenders. Cuisines are seeded by how many nearby spots they have; restaurants are seeded by distance, or shuffled.
 5. **Share it.** A QR code and link open the bracket on anyone's phone. Friends type a first name and they're in.
 6. **Vote.** Everyone picks a winner in every matchup of the round, then locks in. A round closes on its own once everyone has voted. The organizer can close a round early if someone wanders off.
-   - Ties go to the organizer's pick. If the organizer didn't pick either side, the better seed advances.
+   - Ties are settled by a coin flip that plays on every phone. The better seed takes heads (the Memento Vivere sun side) and the other seed takes tails. The result comes from the bracket's own data, so every phone sees the same flip.
    - Someone without a phone can be added under **Invite → Someone at the table without a phone?** They then vote on your phone through a "Voting as" switch.
 7. **Winner.** The winning restaurant comes with a Directions link, an "Hours & reviews" link (Google Maps), and its website and phone number when those are on file.
 
